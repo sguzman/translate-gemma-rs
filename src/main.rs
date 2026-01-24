@@ -441,8 +441,8 @@ async fn translate_markdown_body(
     cmark_opts.code_block_token_count = 3;
 
     // Use the options-taking function; pass an ITERATOR (out_events.iter()).
-    let _state = cmark_with_options(out_events.iter(), &mut out, cmark_opts)
-        .context("serializing markdown")?;
+    let _state = cmark_with_options(out_events.into_iter(), &mut out, cmark_opts)
+    .context("serializing markdown")?;
 
     Ok(out)
 }
