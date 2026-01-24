@@ -1,0 +1,1 @@
+polynom als geordnete Berechnung von $\pi(i) \quad i \in {0,1,2}$,

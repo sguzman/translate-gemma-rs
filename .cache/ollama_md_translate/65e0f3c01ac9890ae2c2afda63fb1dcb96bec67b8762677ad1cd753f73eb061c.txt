@@ -1,0 +1,1 @@
+$$\zeta(x,n) = \pi(i)(\pi(i+1)(x, \alpha^n), \pi(i+1)(\beta, \frac{\alpha^n-1}{\alpha-1}))$$

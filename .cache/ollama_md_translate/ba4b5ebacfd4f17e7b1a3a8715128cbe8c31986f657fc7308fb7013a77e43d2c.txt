@@ -1,0 +1,1 @@
+Ist dies ein praktikabler Ansatz zur Lösung des Problems der iterierten Funktionen?

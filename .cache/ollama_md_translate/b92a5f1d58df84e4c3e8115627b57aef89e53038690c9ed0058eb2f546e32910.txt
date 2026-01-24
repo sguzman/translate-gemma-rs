@@ -1,0 +1,1 @@
+die folgenden Schritte beschreiben die Berechnung der Iteration von $f(x)$ für 1 Mal.

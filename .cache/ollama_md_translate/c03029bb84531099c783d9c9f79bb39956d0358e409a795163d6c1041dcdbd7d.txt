@@ -1,0 +1,1 @@
+polynomial liefert die Interpretation des Objekts, wenn dies erforderlich ist.

@@ -1,0 +1,1 @@
+Ich achte nicht darauf, welche spezifische nicht-funktionale Variable verwendet wird.

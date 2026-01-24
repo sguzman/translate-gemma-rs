@@ -7,7 +7,8 @@ license = "MIT"
 [dependencies]
 anyhow = "1.0.86"
 clap = { version = "4.5.17", features = ["derive"] }
-pulldown-cmark = "0.10.3"
+pulldown-cmark = "0.13.0"
+
 pulldown-cmark-to-cmark = "22.0.0"
 reqwest = { version = "0.12.7", default-features = false, features = [
   "json",

@@ -1,0 +1,1 @@
+In diesem Kontext betrachten wir Addition als eine binäre Operation auf

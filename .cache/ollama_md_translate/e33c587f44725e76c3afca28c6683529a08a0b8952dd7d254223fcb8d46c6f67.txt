@@ -1,0 +1,1 @@
+Die Komposition von Funktionen ist assoziativ und die Berechnung kann bei

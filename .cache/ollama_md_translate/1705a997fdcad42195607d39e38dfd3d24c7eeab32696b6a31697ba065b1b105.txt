@@ -1,0 +1,1 @@
+$$\pi(1,n) = \pi_1(1) \circ \pi_2(1) \circ \dots \circ \pi$$

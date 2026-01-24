@@ -1,0 +1,1 @@
+$\pi(i-1)$, und so weiter. Wenn wir $\pi(2)$ hätten, die dem entspricht,

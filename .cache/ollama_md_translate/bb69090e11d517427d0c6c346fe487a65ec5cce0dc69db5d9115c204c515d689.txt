@@ -1,0 +1,1 @@
+Iterationen und der höchste Grad des Polynoms. Es scheint also, dass wir

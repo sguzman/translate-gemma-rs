@@ -1,0 +1,1 @@
+Nehmen wir an, wir möchten die geschlossene Form von $f(x)$ für $n$ Iterationen finden.

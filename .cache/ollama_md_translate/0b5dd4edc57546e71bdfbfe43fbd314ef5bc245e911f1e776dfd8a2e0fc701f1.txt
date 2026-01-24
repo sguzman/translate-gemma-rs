@@ -1,0 +1,1 @@
+der größte der beiden Operanden.

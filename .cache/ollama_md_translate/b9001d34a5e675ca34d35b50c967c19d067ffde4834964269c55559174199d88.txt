@@ -1,0 +1,1 @@
+Denken Sie an $phi$ als ein vollwertiges Programm, das ein Programmierer schreiben würde

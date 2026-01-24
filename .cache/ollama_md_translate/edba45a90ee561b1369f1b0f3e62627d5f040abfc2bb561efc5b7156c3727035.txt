@@ -1,0 +1,1 @@
+$n_1$ kann symbolisch mit $\lambda_1(n_1)$ ausgedrückt werden. Durch Anwendung der

@@ -1,0 +1,1 @@
+Operationen, die wir in $\theta$ finden, erhöhen wir um eins, um die nächste zu erhalten

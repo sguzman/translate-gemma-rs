@@ -1,0 +1,1 @@
+Übung in funktionaler Programmierung, um eine Funktion mit mehreren

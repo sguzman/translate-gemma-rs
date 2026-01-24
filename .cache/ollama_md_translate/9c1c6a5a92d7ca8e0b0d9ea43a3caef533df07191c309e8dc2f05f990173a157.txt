@@ -1,0 +1,1 @@
+$f_3(x,n) \in \mathbb{P}^{2n}$

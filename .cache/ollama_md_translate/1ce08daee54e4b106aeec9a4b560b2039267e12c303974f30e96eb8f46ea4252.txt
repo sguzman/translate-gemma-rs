@@ -1,0 +1,1 @@
+eine geschlossene Form zur Iteration von Polynomen, die aus der anspruchsvollen

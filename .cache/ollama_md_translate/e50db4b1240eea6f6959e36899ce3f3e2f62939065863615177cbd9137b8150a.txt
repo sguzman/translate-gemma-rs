@@ -1,0 +1,1 @@
+$\Delta$ ist eine Typfunktion, die einen Typ aus der Menge entgegennimmt,

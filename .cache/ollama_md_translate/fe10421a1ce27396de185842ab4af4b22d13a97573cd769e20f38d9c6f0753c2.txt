@@ -1,0 +1,1 @@
+Grad des Polynoms ist rein eine Funktion der Anzahl von

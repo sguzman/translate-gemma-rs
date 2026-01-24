@@ -1,0 +1,1 @@
+$\pi(i), \quad i \in \mathbb{N} \land i > 0$. Gegeben eine Funktion $\pi(i)$,

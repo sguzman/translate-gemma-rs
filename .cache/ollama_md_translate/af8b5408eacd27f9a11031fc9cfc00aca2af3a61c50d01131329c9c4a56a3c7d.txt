@@ -1,0 +1,1 @@
+Die erste Sache, die wir tun würden, wäre, die Funktion zu "currieren". Dies ist eine gängige

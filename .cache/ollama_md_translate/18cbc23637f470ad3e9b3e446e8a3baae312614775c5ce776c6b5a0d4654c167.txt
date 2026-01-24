@@ -1,0 +1,1 @@
+Beziehung jeder Operation zu jeder anderen Operation und den nachfolgenden

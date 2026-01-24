@@ -1,0 +1,1 @@
+$$\epsilon(x) = \beta \cdot x^\alpha$$

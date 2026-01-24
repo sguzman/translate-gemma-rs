@@ -1,0 +1,1 @@
+wie oft die Funktion mit sich selbst rekursiv aufrufen? Und die Anzahl

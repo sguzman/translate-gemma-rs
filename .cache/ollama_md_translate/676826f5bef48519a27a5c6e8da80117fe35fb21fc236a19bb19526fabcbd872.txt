@@ -1,0 +1,1 @@
+$i$ ist eine natürliche Zahl, die zur Indizierung von $\pi$ verwendet wird.

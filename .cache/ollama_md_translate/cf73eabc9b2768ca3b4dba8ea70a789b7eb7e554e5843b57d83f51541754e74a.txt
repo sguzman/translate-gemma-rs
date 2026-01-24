@@ -1,0 +1,1 @@
+$(\lambda_1^{-1} \circ \lambda_1): \mathbb{N} \rightarrow \mathbb{N} \rightarrow \mathbb{N}

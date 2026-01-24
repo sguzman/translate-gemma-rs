@@ -1,0 +1,1 @@
+s transformieren wir unser Polynom in eine allgemeinere Version von einem

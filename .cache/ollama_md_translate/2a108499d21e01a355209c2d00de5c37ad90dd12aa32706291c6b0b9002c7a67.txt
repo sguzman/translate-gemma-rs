@@ -1,0 +1,1 @@
+wiederholte, um den nächsten Operator in der Sequenz zu erzeugen.

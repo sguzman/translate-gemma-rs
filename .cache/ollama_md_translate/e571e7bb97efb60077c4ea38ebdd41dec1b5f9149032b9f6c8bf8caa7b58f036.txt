@@ -1,0 +1,1 @@
+Zwecke. Nehmen wir nun an, dass $z(x)$ ein Polynom ist, können wir daraus eine

@@ -1,0 +1,1 @@
+$\pi(i-1)$ ist die Funktion, die mit sich selbst kombiniert wird.

@@ -1,0 +1,1 @@
+$$\pi_1(0) \circ \pi_2(0) \circ \dots \circ \pi$$

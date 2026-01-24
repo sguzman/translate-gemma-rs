@@ -1,0 +1,1 @@
+$$\epsilon(x,n) = \beta^{\frac{\alpha^n-1}{\alpha-1}} \cdot x^{\alpha^n}$$

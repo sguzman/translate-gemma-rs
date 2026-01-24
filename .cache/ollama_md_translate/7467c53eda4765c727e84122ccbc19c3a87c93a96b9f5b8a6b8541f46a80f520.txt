@@ -1,0 +1,1 @@
+definiere eine Hilfstypsignatur, um das Schreiben der Sequenz zu erleichtern

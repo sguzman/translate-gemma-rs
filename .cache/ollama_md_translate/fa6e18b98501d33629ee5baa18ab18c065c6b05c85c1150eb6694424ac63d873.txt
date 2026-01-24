@@ -1,0 +1,1 @@
+wirklich behaupten, dass eine Funktion $z(x), \quad x \in \mathbb{R}$ eine

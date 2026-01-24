@@ -1,0 +1,1 @@
+ein Polynom umfasst Addition, Multiplikation und Exponent. Anstatt

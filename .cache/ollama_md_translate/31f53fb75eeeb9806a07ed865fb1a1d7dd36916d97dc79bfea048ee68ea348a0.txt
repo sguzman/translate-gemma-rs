@@ -1,0 +1,1 @@
+Die iterative, geschlossene Form für n Iterationen lautet:

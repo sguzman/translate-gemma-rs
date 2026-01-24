@@ -1,0 +1,1 @@
+monom, gilt dasselbe für jeden Polynom. Das liegt daran, dass die

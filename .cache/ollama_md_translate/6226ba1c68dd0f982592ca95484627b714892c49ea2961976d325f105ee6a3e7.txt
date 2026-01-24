@@ -1,0 +1,1 @@
+$$\lambda_1: \mathbb{N} \rightarrow \mathbb{N}$$

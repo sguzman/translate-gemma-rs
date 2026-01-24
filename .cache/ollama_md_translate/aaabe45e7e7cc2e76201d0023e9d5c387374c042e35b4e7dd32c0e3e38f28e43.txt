@@ -1,0 +1,1 @@
+$$\Delta: \mathbb{T} \times \mathbb{N} \rightarrow \mathbb{T}^n$$

@@ -1,0 +1,1 @@
+bestimmt den Typ eines iterierten Polynoms durch reine symbolische Methoden

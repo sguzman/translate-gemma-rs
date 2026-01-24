@@ -1,0 +1,1 @@
+einige Fortschritte. Wir können nun die Typdefinition für ein Polynom wie

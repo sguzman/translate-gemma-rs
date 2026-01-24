@@ -1,0 +1,1 @@
+$f_n(f_n,m): \Delta(\mathbb{P}, n) \rightarrow \Delta(\mathbb{P}, n^m)$

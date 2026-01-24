@@ -1,0 +1,1 @@
+$$\epsilon(x) = \pi(1)(\pi(2)(x, \alpha), \beta)$$

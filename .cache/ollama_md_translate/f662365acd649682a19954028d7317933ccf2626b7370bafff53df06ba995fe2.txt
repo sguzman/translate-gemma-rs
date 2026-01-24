@@ -1,0 +1,1 @@
+Daher, gegeben ein beliebiges Polynom vom Grad $n$, können wir

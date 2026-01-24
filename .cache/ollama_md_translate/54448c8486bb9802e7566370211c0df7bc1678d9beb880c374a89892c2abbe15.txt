@@ -1,0 +1,1 @@
+gibt eine Funktion zurück. Betrachten Sie es als eine praktische Hash-Funktion zum Speichern von

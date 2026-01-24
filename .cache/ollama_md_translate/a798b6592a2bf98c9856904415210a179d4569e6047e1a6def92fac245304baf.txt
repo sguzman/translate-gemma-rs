@@ -1,0 +1,1 @@
+$$\theta(x,n) = \alpha^n \cdot x + \frac{\alpha^n-1}{\alpha-1} \cdot \beta$$

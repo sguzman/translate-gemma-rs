@@ -1,0 +1,1 @@
+Die Technik besteht darin, eine Reihenfolge für die Operationen festzulegen. Die Reihenfolge

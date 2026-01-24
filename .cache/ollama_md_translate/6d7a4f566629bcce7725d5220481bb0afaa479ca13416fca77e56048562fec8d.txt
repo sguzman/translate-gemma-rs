@@ -1,0 +1,1 @@
+Wie würde die iterative Anwendung dieser Funktion aussehen?

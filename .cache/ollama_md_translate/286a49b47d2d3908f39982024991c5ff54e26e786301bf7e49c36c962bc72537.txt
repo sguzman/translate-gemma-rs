@@ -1,0 +1,1 @@
+Ansatz zur Berechnung der expliziten Form iterierter Polynome. Wissen über

@@ -1,0 +1,1 @@
+ein binärer Operator über Iterationen auf die gleiche Weise, wie es einen

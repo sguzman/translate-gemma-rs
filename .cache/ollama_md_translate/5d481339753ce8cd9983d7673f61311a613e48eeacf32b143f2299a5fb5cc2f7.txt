@@ -1,0 +1,1 @@
+Auswahl eines Polynoms. Der Koeffizient für den Leitterm des n-ten

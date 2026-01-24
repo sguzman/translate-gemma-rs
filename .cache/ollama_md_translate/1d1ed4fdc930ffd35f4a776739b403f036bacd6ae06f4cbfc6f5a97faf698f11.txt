@@ -1,0 +1,1 @@
+$$f_3(f_3,n): \Delta(\mathbb{P}, 2) \rightarrow \Delta(\mathbb{P}, 4) \rightarrow \dots \rightarrow  \Delta(\mathbb{P}, 2n-2) \rightarrow \Delta(\mathbb{P}, 2n)$$

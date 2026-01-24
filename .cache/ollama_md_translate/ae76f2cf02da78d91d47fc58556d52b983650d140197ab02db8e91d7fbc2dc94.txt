@@ -1,0 +1,1 @@
+$$((\pi(0) \circ \pi(1)) \circ (\pi(0) \circ \pi(1)))  = \pi(0) \circ \mathbb{O}

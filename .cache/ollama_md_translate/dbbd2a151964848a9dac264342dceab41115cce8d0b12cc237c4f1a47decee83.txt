@@ -1,0 +1,1 @@
+die inverse möchte Folgendes: $\lambda_1^{-1}(\lambda_1(n_1))$. Die inverse
