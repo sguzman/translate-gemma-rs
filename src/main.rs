@@ -1,3 +1,634 @@
-fn main() {
-    println!("Hello, world!");
+use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
+use pulldown_cmark::{Event, Options, Parser as MdParser, Tag, TagEnd};
+use pulldown_cmark_to_cmark::{cmark, Options as CmarkOptions};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use tokio::sync::Semaphore;
+use tracing::{debug, error, info, warn};
+use walkdir::WalkDir;
+
+#[derive(Parser, Debug, Clone)]
+#[command(
+    name = "ollama_md_translate",
+    about = "Translate Markdown files via Ollama (TranslateGemma) while preserving code blocks and markup."
+)]
+struct Cli {
+    /// Input file or directory
+    #[arg(value_name = "INPUT")]
+    input: PathBuf,
+
+    /// Source language label (e.g., "English", "auto")
+    #[arg(long, default_value = "auto")]
+    source_lang: String,
+
+    /// Target language label (e.g., "German")
+    #[arg(long, default_value = "German")]
+    target_lang: String,
+
+    /// Ollama model name (e.g., "translategemma:latest")
+    #[arg(long, default_value = "translategemma:latest")]
+    model: String,
+
+    /// Ollama base URL (no trailing /api). Example: http://localhost:11434
+    #[arg(long, default_value = "http://localhost:11434")]
+    base_url: String,
+
+    /// Keep model loaded in memory (Ollama keep_alive). Examples: "10m", "3600", "-1"
+    #[arg(long, default_value = "10m")]
+    keep_alive: String,
+
+    /// Max concurrent translation requests
+    #[arg(long, default_value_t = 4)]
+    concurrency: usize,
+
+    /// Translate YAML front matter at the top of the file (--- ... ---). Default: keep as-is.
+    #[arg(long, default_value_t = false)]
+    translate_frontmatter: bool,
+
+    /// Write results in-place (atomic replace). If false, you must supply --out-dir.
+    #[arg(long, default_value_t = false)]
+    in_place: bool,
+
+    /// Output directory (required unless --in-place)
+    #[arg(long)]
+    out_dir: Option<PathBuf>,
+
+    /// Cache directory for translated segments (default: .cache/ollama_md_translate)
+    #[arg(long)]
+    cache_dir: Option<PathBuf>,
+
+    /// Log level: error, warn, info, debug, trace
+    #[arg(long, default_value = "info")]
+    log_level: String,
+
+    /// Dry run: do not write files, just log what would happen
+    #[arg(long, default_value_t = false)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaGenerateRequest<'a> {
+    model: &'a str,
+    prompt: &'a str,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<&'a str>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaGenerateResponse {
+    response: String,
+    #[allow(dead_code)]
+    done: bool,
+    #[allow(dead_code)]
+    model: Option<String>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    init_tracing(&cli.log_level)?;
+
+    validate_args(&cli)?;
+
+    let cache_dir = cli
+        .cache_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(".cache/ollama_md_translate"));
+
+    if !cli.dry_run {
+        fs::create_dir_all(&cache_dir)
+            .with_context(|| format!("creating cache dir: {}", cache_dir.display()))?;
+    }
+
+    info!("input = {}", cli.input.display());
+    info!("model = {}", cli.model);
+    info!("base_url = {}", cli.base_url);
+    info!("source_lang = {}", cli.source_lang);
+    info!("target_lang = {}", cli.target_lang);
+    info!("in_place = {}", cli.in_place);
+    if let Some(out) = &cli.out_dir {
+        info!("out_dir = {}", out.display());
+    }
+    info!("cache_dir = {}", cache_dir.display());
+    info!("concurrency = {}", cli.concurrency);
+    info!("dry_run = {}", cli.dry_run);
+
+    let client = Client::builder()
+        .user_agent("ollama_md_translate/0.1.0")
+        .build()
+        .context("building reqwest client")?;
+
+    let files = collect_markdown_files(&cli.input)?;
+    if files.is_empty() {
+        warn!("No markdown files found at {}", cli.input.display());
+        return Ok(());
+    }
+
+    info!("found {} markdown file(s)", files.len());
+
+    // Concurrency guard for HTTP calls.
+    let sem = std::sync::Arc::new(Semaphore::new(cli.concurrency));
+
+    let mut failures = 0usize;
+
+    for (idx, path) in files.iter().enumerate() {
+        info!("[{}/{}] processing {}", idx + 1, files.len(), path.display());
+
+        match process_one_file(&cli, &client, &cache_dir, sem.clone(), path).await {
+            Ok(()) => info!("ok: {}", path.display()),
+            Err(e) => {
+                failures += 1;
+                error!("failed: {}: {:#}", path.display(), e);
+            }
+        }
+    }
+
+    if failures > 0 {
+        bail!("completed with {} failure(s)", failures);
+    }
+
+    info!("done");
+    Ok(())
+}
+
+fn init_tracing(level: &str) -> Result<()> {
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+    Ok(())
+}
+
+fn validate_args(cli: &Cli) -> Result<()> {
+    if cli.in_place && cli.out_dir.is_some() {
+        bail!("Use either --in-place or --out-dir, not both");
+    }
+    if !cli.in_place && cli.out_dir.is_none() {
+        bail!("If not using --in-place, you must provide --out-dir");
+    }
+    Ok(())
+}
+
+fn is_markdown_path(p: &Path) -> bool {
+    matches!(
+        p.extension().and_then(OsStr::to_str).map(|s| s.to_lowercase()).as_deref(),
+        Some("md") | Some("markdown") | Some("mdown") | Some("mkd") | Some("mkdn")
+    )
+}
+
+fn collect_markdown_files(input: &Path) -> Result<Vec<PathBuf>> {
+    if input.is_file() {
+        if is_markdown_path(input) {
+            return Ok(vec![input.to_path_buf()]);
+        } else {
+            return Ok(vec![]);
+        }
+    }
+
+    if !input.is_dir() {
+        bail!("input is neither file nor directory: {}", input.display());
+    }
+
+    let mut out = Vec::new();
+    for ent in WalkDir::new(input).follow_links(false) {
+        let ent = ent?;
+        if ent.file_type().is_file() && is_markdown_path(ent.path()) {
+            out.push(ent.path().to_path_buf());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+async fn process_one_file(
+    cli: &Cli,
+    client: &Client,
+    cache_dir: &Path,
+    sem: std::sync::Arc<Semaphore>,
+    path: &Path,
+) -> Result<()> {
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+
+    let (frontmatter_opt, body) = split_frontmatter(&raw);
+
+    let translated_frontmatter = if let Some(frontmatter) = frontmatter_opt.as_deref() {
+        if cli.translate_frontmatter {
+            info!("translating front matter");
+            Some(
+                translate_plaintext(
+                    cli,
+                    client,
+                    cache_dir,
+                    sem.clone(),
+                    frontmatter,
+                    "frontmatter",
+                )
+                .await?,
+            )
+        } else {
+            debug!("keeping front matter as-is");
+            Some(frontmatter.to_string())
+        }
+    } else {
+        None
+    };
+
+    let translated_body =
+        translate_markdown_body(cli, client, cache_dir, sem.clone(), body).await?;
+
+    let mut final_out = String::new();
+    if let Some(fm) = translated_frontmatter {
+        final_out.push_str(&fm);
+    }
+    final_out.push_str(&translated_body);
+
+    let out_path = compute_output_path(cli, path)?;
+    if cli.dry_run {
+        info!("dry_run: would write {}", out_path.display());
+        return Ok(());
+    }
+
+    if let Some(parent) = out_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating directory {}", parent.display()))?;
+    }
+
+    atomic_write(&out_path, final_out.as_bytes())
+        .with_context(|| format!("writing {}", out_path.display()))?;
+
+    Ok(())
+}
+
+fn compute_output_path(cli: &Cli, in_path: &Path) -> Result<PathBuf> {
+    if cli.in_place {
+        return Ok(in_path.to_path_buf());
+    }
+
+    let out_dir = cli.out_dir.as_ref().ok_or_else(|| anyhow!("missing --out-dir"))?;
+
+    if cli.input.is_file() {
+        // Single file: output is out_dir/<filename>
+        let fname = in_path
+            .file_name()
+            .ok_or_else(|| anyhow!("bad filename: {}", in_path.display()))?;
+        Ok(out_dir.join(fname))
+    } else {
+        // Directory: preserve relative path under input root
+        let rel = in_path
+            .strip_prefix(&cli.input)
+            .with_context(|| format!("computing relative path under {}", cli.input.display()))?;
+        Ok(out_dir.join(rel))
+    }
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    let tmp = path.with_extension("tmp.ollama_md_translate");
+    {
+        let mut f = fs::File::create(&tmp)
+            .with_context(|| format!("creating temp file {}", tmp.display()))?;
+        f.write_all(bytes)
+            .with_context(|| format!("writing temp file {}", tmp.display()))?;
+        f.sync_all()
+            .with_context(|| format!("sync temp file {}", tmp.display()))?;
+    }
+    fs::rename(&tmp, path).with_context(|| {
+        format!(
+            "atomic rename {} -> {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Splits YAML front matter if present, returning (frontmatter_with_delimiters, body)
+fn split_frontmatter(input: &str) -> (Option<String>, &str) {
+    // YAML front matter pattern:
+    // ---\n
+    // ...\n
+    // ---\n
+    // <body>
+    if !input.starts_with("---\n") {
+        return (None, input);
+    }
+
+    // Find the next "\n---\n" after the opening.
+    // Limit search to first ~200KB to avoid pathological cases.
+    let hay = &input[..input.len().min(200_000)];
+    if let Some(end_idx) = hay[4..].find("\n---\n") {
+        // end_idx is relative to hay[4..]
+        let fm_end = 4 + end_idx + "\n---\n".len();
+        let (fm, rest) = input.split_at(fm_end);
+        return (Some(fm.to_string()), rest);
+    }
+
+    (None, input)
+}
+
+async fn translate_markdown_body(
+    cli: &Cli,
+    client: &Client,
+    cache_dir: &Path,
+    sem: std::sync::Arc<Semaphore>,
+    body: &str,
+) -> Result<String> {
+    // Parse Markdown into events, translate only human text.
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_FOOTNOTES);
+    opts.insert(Options::ENABLE_TASKLISTS);
+    opts.insert(Options::ENABLE_SMART_PUNCTUATION);
+
+    let parser = MdParser::new_ext(body, opts);
+
+    // We'll skip translating inside code blocks, inline code, and raw HTML.
+    let mut in_code_block_depth: usize = 0;
+    let mut in_html_block_depth: usize = 0;
+
+    let mut out_events: Vec<Event<'static>> = Vec::new();
+
+    // Small in-memory cache to avoid repeated disk reads in a single file.
+    let mut memo: HashMap<String, String> = HashMap::new();
+
+    for ev in parser {
+        match &ev {
+            Event::Start(tag) => {
+                match tag {
+                    Tag::CodeBlock(_) => in_code_block_depth += 1,
+                    Tag::HtmlBlock => in_html_block_depth += 1,
+                    _ => {}
+                }
+                out_events.push(ev.into_static());
+            }
+            Event::End(tag_end) => {
+                match tag_end {
+                    TagEnd::CodeBlock => {
+                        if in_code_block_depth > 0 {
+                            in_code_block_depth -= 1
+                        }
+                    }
+                    TagEnd::HtmlBlock => {
+                        if in_html_block_depth > 0 {
+                            in_html_block_depth -= 1
+                        }
+                    }
+                    _ => {}
+                }
+                out_events.push(ev.into_static());
+            }
+            Event::Code(_) => {
+                // Inline code: do not translate
+                out_events.push(ev.into_static());
+            }
+            Event::Html(_) => {
+                // Raw HTML inline: do not translate
+                out_events.push(ev.into_static());
+            }
+            Event::Text(t) => {
+                if in_code_block_depth > 0 || in_html_block_depth > 0 {
+                    out_events.push(ev.into_static());
+                    continue;
+                }
+
+                let original = t.to_string();
+
+                // Fast path: whitespace-only
+                if original.trim().is_empty() {
+                    out_events.push(Event::Text(original.into()));
+                    continue;
+                }
+
+                // Per-file memo
+                if let Some(hit) = memo.get(&original) {
+                    debug!("memo hit: {} bytes", original.len());
+                    out_events.push(Event::Text(hit.clone().into()));
+                    continue;
+                }
+
+                let translated = translate_plaintext(
+                    cli,
+                    client,
+                    cache_dir,
+                    sem.clone(),
+                    &original,
+                    "markdown_text",
+                )
+                .await?;
+
+                memo.insert(original.clone(), translated.clone());
+                out_events.push(Event::Text(translated.into()));
+            }
+            _ => {
+                // SoftBreak/HardBreak, etc.
+                out_events.push(ev.into_static());
+            }
+        }
+    }
+
+    // Render back to Markdown (CommonMark-ish). This may normalize whitespace.
+    let mut out = String::new();
+    let mut cmark_opts = CmarkOptions::default();
+    cmark_opts.code_block_token_count = 3; // ```
+    cmark(&out_events, &mut out, cmark_opts).context("serializing markdown")?;
+    Ok(out)
+}
+
+async fn translate_plaintext(
+    cli: &Cli,
+    client: &Client,
+    cache_dir: &Path,
+    sem: std::sync::Arc<Semaphore>,
+    text: &str,
+    kind: &str,
+) -> Result<String> {
+    let key = cache_key(&cli.model, &cli.source_lang, &cli.target_lang, kind, text);
+    if let Some(hit) = cache_read(cache_dir, &key)? {
+        debug!("cache hit: kind={} bytes={}", kind, text.len());
+        return Ok(hit);
+    }
+
+    debug!("cache miss: kind={} bytes={}", kind, text.len());
+
+    // Prevent flooding the server with too many concurrent requests.
+    let _permit = sem.acquire().await.context("semaphore acquire")?;
+
+    let prompt = build_translation_prompt(&cli.source_lang, &cli.target_lang, text);
+
+    let url = format!("{}/api/generate", cli.base_url.trim_end_matches('/'));
+
+    debug!("POST {} ({} bytes)", url, prompt.len());
+
+    let req = OllamaGenerateRequest {
+        model: &cli.model,
+        prompt: &prompt,
+        stream: false,
+        system: None,
+        keep_alive: Some(&cli.keep_alive),
+    };
+
+    let resp = client
+        .post(url)
+        .json(&req)
+        .send()
+        .await
+        .context("ollama request failed")?;
+
+    let status = resp.status();
+    let body = resp.text().await.context("reading ollama response body")?;
+
+    if !status.is_success() {
+        bail!("ollama returned {}: {}", status, body);
+    }
+
+    let parsed: OllamaGenerateResponse =
+        serde_json::from_str(&body).context("parsing ollama JSON")?;
+
+    let translated = postprocess_translation(&parsed.response);
+
+    cache_write(cache_dir, &key, &translated)?;
+    Ok(translated)
+}
+
+fn build_translation_prompt(source: &str, target: &str, text: &str) -> String {
+    // Very strict: output only the translation.
+    // We say "plain text extracted from Markdown" to discourage adding markup.
+    format!(
+        "You are a translation engine.\n\
+         Translate from {source} to {target}.\n\
+         The input is plain text extracted from a Markdown document.\n\
+         Rules:\n\
+         - Output ONLY the translation (no preface, no quotes, no notes).\n\
+         - Preserve line breaks exactly.\n\
+         - Do not add Markdown syntax.\n\
+         - Keep URLs and email addresses unchanged if they appear.\n\n\
+         INPUT:\n{text}\n",
+        source = source,
+        target = target,
+        text = text
+    )
+}
+
+fn postprocess_translation(s: &str) -> String {
+    // Ollama responses often include a trailing newline; keep it stable but avoid extra whitespace.
+    // We do NOT trim internal whitespace or line breaks.
+    let mut out = s.to_string();
+
+    // Remove a single leading BOM if it appears (rare).
+    if out.starts_with('\u{feff}') {
+        out = out.trim_start_matches('\u{feff}').to_string();
+    }
+
+    // Remove a single trailing newline if it's the only trailing whitespace (common model behavior).
+    // But keep intentional multi-line trailing content.
+    while out.ends_with("\r\n") {
+        out.pop();
+        out.pop();
+        out.push('\n');
+    }
+
+    // If model adds extra leading/trailing blank lines, trim only outermost blank lines.
+    // This is conservative: it won't affect middle formatting.
+    trim_outer_blank_lines(&out)
+}
+
+fn trim_outer_blank_lines(s: &str) -> String {
+    let lines: Vec<&str> = s.split('\n').collect();
+    if lines.is_empty() {
+        return s.to_string();
+    }
+
+    let mut start = 0usize;
+    let mut end = lines.len();
+
+    while start < end && lines[start].trim().is_empty() {
+        start += 1;
+    }
+    while end > start && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+
+    let mut out = lines[start..end].join("\n");
+    // Preserve a final newline if original had one and there is content.
+    if s.ends_with('\n') && !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+fn cache_key(model: &str, source: &str, target: &str, kind: &str, text: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(model.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(source.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(target.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(kind.as_bytes());
+    hasher.update(b"\n");
+    hasher.update(text.as_bytes());
+    let digest = hasher.finalize();
+    hex_lower(&digest)
+}
+
+fn cache_read(cache_dir: &Path, key: &str) -> Result<Option<String>> {
+    let path = cache_dir.join(format!("{}.txt", key));
+    if !path.exists() {
+        return Ok(None);
+    }
+    let s = fs::read_to_string(&path)
+        .with_context(|| format!("reading cache file {}", path.display()))?;
+    Ok(Some(s))
+}
+
+fn cache_write(cache_dir: &Path, key: &str, value: &str) -> Result<()> {
+    fs::create_dir_all(cache_dir)
+        .with_context(|| format!("creating cache dir {}", cache_dir.display()))?;
+    let path = cache_dir.join(format!("{}.txt", key));
+    fs::write(&path, value.as_bytes())
+        .with_context(|| format!("writing cache file {}", path.display()))?;
+    Ok(())
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const LUT: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(LUT[(b >> 4) as usize] as char);
+        out.push(LUT[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// Helper: convert Event<'a> into Event<'static> by allocating owned strings.
+trait IntoStaticEvent {
+    fn into_static(self) -> Event<'static>;
+}
+
+impl<'a> IntoStaticEvent for Event<'a> {
+    fn into_static(self) -> Event<'static> {
+        match self {
+            Event::Text(cow) => Event::Text(cow.to_string().into()),
+            Event::Code(cow) => Event::Code(cow.to_string().into()),
+            Event::Html(cow) => Event::Html(cow.to_string().into()),
+            Event::InlineHtml(cow) => Event::InlineHtml(cow.to_string().into()),
+            Event::FootnoteReference(cow) => Event::FootnoteReference(cow.to_string().into()),
+            Event::SoftBreak => Event::SoftBreak,
+            Event::HardBreak => Event::HardBreak,
+            Event::Rule => Event::Rule,
+            Event::TaskListMarker(b) => Event::TaskListMarker(b),
+            Event::Start(tag) => Event::Start(tag),
+            Event::End(tag_end) => Event::End(tag_end),
+        }
+    }
 }
