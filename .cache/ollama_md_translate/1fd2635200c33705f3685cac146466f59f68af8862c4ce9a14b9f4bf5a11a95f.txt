@@ -1,1 +1,0 @@
-$$f_1(x) \circ \cdots \circ f_n(x) =  2^n \cdot x + (2^n - 1)$$

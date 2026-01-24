@@ -1,1 +1,0 @@
-Operationen, die auf einem bestimmten Operanden durchgeführt werden. Symbolisch dargestellt, können wir

@@ -1,1 +1,0 @@
-$$z(x) = \alpha_0 \cdot \pi(0) + \alpha_1 \cdot \pi(1) + \alpha_2 \cdot \pi(2)$$

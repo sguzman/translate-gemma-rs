@@ -1,1 +1,0 @@
-$$+: \mathbb{P}^\alpha \rightarrow \mathbb{P}^\beta \rightarrow \mathbb{P}^\gamma, \quad \alpha, \beta, \gamma \in \mathbb{N} \land \gamma \in

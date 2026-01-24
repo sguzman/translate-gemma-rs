@@ -1,1 +1,0 @@
-Die Operation der Exponentiation ist die komplexeste. Ich habe sie einfach nummeriert.

@@ -1,1 +1,0 @@
-$f(x,n)$ wobei $n \in \mathbb{N}$, die Möglichkeit, die geschlossene

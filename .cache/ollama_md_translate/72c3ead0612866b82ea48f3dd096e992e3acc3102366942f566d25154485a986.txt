@@ -1,1 +1,0 @@
-$$f(x)=ax^2 + bx + c, \quad f: \mathbb{R} \rightarrow \mathbb{R} \land a,b,c \in \mathbb{R}$$

@@ -1,1 +1,0 @@
-f_2(x) = a_2x, \quad f_2: \mathbb{R} \rightarrow \mathbb{R} \land a \in \mathbb{R}

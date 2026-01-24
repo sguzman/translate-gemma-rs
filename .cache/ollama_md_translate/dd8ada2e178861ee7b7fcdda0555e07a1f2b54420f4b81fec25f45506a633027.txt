@@ -1,1 +1,0 @@
-verschiedene polynomiale Ausdrücke in unsere $\pi$-Notation umwandeln und prüfen, ob wir so

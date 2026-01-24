@@ -1,1 +1,0 @@
-Compiler, die die erfassten Semantiken einer Sprache in eine

@@ -1,1 +1,0 @@
-beginnt bei 0 und um 1 inkrementiert. Die Funktion $\pi$ ist eine Funktion, die

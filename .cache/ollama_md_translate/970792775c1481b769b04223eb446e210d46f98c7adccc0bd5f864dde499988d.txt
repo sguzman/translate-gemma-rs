@@ -1,1 +1,0 @@
-die einzelnen Schritte als eine Abfolge von Operationen, kann das Programm

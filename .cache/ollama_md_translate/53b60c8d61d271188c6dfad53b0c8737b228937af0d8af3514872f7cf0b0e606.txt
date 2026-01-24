@@ -1,1 +1,0 @@
-$n_1$. Der Inverse ist $\lambda_1^{-1}$. Die vollständige Syntax zum Anwenden der

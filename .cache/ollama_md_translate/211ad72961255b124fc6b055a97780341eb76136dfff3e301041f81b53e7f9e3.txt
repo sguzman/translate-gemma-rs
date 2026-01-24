@@ -1,1 +1,0 @@
-Monome, die ein weiteres Monom zurückgeben. Der Grad des Monoms ist

@@ -1,1 +1,0 @@
-Ausdruck seines eigenen Grades und der Anzahl der Iterationen. Das ist eine

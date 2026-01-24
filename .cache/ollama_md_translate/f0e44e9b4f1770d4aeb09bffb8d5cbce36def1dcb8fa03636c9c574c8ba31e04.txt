@@ -1,1 +1,0 @@
-das ist erforderlich, damit $z(x)$ für ein algebraisches Objekt gültig ist

@@ -1,1 +1,0 @@
-$\mathbb{O}$ ist meine ad-hoc-Methode, um eine Reihe von Operationen zu komponieren.

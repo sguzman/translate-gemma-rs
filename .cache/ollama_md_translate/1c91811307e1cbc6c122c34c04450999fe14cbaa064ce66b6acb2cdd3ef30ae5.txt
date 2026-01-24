@@ -1,1 +1,0 @@
-In einer perfekten Welt wären alle Operatoren kommutativ und der sofortige

@@ -1,1 +1,0 @@
-gültige Interpretation für Objekte, die keine Zahlen sind. Wie bereits erwähnt

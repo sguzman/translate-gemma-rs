@@ -1,1 +1,0 @@
-Es gibt eine Isomorphie für jeden Term, sobald er einmal zurück zum ursprünglichen Zustand iteriert wird.

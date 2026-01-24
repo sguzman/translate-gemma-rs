@@ -1,1 +1,0 @@
-Angenommen, eine einfache Gleichung wie $\lambda_1$, dann führt die Anwendung dieser Funktion

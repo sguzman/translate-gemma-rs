@@ -1,1 +1,0 @@
-$$\phi: \Gamma_1 \rightarrow \Gamma_2 \rightarrow \Gamma_3 \rightarrow \dots \rightarrow \Gamma

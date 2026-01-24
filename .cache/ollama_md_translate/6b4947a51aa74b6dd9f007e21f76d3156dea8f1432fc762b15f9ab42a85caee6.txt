@@ -1,1 +1,0 @@
-verwenden zwei Operanden und es handelt sich nicht um eine Exponentiation.

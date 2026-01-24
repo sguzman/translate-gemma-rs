@@ -1,1 +1,0 @@
-die Funktion von $\pi(1)$ zu $\pi(0)$ kann auf jede Funktion angewendet werden

@@ -1,1 +1,0 @@
-liefern, was die ursprüngliche Polynomgleichung ergeben würde, einmal iteriert. näher

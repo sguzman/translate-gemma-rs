@@ -1,1 +1,0 @@
-unter Berücksichtigung der Tatsache, dass die inverse Funktion bereits einen eigenen Typ hat.

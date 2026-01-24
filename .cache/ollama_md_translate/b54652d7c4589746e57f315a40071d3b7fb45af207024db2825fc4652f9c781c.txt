@@ -1,1 +1,0 @@
-Objekte zu einer Algebra, die isomorph zu den natürlichen Zahlen ist.

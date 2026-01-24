@@ -1,1 +1,0 @@
-Ausgedrückt als eine Folge von Operationen, die Iteration eines Monoms

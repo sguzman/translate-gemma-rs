@@ -1,1 +1,0 @@
-Operationen in einer bestimmten Reihenfolge. Wenn wir $n$ als zweiten Operanden zu $\pi$ hinzufügen,

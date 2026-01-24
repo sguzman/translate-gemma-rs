@@ -1,1 +1,0 @@
-Funktion zur Berechnung einer einfacheren zusammengesetzten Zahl. Nehmen wir an, dass die folgende

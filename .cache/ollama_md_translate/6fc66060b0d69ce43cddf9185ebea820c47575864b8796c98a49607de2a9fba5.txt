@@ -1,1 +1,0 @@
-zeigt, dass wir eine Funktion problemlos einer anderen Funktion zuordnen können und

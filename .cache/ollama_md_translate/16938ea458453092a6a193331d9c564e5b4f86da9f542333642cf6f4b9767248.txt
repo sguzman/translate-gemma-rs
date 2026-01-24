@@ -1,1 +1,0 @@
-Ausdruck, jede Iteration ist symbolisch eine Funktion der Addition und

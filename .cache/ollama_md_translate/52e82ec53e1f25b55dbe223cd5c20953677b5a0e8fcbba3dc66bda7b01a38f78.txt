@@ -1,1 +1,0 @@
-in der Polynom, um den Grad des Polynoms zu ändern.

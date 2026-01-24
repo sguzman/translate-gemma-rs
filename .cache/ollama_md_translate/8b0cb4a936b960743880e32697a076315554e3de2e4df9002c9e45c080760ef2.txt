@@ -1,1 +1,0 @@
-ändert sich nicht für unser Beispiel über die Iterationen. Die n-te Iteration ist

@@ -1,1 +1,0 @@
-das Konto ist die naive Version des Programms. Notwendigerweise,

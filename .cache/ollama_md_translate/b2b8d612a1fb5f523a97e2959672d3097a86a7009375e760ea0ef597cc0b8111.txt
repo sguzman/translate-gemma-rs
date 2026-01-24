@@ -1,1 +1,0 @@
-Vektoren, Tensoren, Funktionen, Operatoren und so weiter. Der undefinierte Begriff

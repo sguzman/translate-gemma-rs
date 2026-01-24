@@ -1,1 +1,0 @@
-Funktionen, um $\pi(0)$ zu berechnen, bevor ich den finalen Ausdruck berechnen kann. Viel zu

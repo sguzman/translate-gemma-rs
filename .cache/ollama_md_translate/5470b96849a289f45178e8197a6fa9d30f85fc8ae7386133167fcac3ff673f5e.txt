@@ -1,1 +1,0 @@
-wir fügen die Möglichkeit hinzu, unsere Operation zu wiederholen.

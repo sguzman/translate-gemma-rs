@@ -1,1 +1,0 @@
-Iteration ist $2^n$. Das macht Sinn, da es die Ausführung von jedem

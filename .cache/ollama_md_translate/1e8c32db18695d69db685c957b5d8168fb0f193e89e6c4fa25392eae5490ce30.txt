@@ -1,1 +1,0 @@
-$(\lambda_1^{-1} \circ \lambda_1) \quad n_1$

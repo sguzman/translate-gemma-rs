@@ -1,1 +1,0 @@
-$$\epsilon(x,n) = \pi(1)(\pi(2)(x, \alpha^n), \pi(2)(\beta, \frac{\alpha^n-1}{\alpha-1}))$$

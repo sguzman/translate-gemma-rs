@@ -1,1 +1,0 @@
-$\pi(0) \circ \pi(1)$. Wir müssen wissen, was die Komposition von zwei

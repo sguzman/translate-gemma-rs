@@ -1,1 +1,0 @@
-Funktion, wird immer zuerst mit $2$ multipliziert. Der nächste Term, $1$, ist

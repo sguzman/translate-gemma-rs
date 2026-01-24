@@ -1,1 +1,0 @@
-Da wäre also der konstante Term für die n-te Iteration: $2^n - 1$.
