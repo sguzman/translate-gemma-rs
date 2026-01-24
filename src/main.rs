@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use pulldown_cmark::{Event, Options, Parser as MdParser, Tag, TagEnd};
@@ -436,13 +437,16 @@ async fn translate_markdown_body(
         }
     }
 
+    // Render back to Markdown (CommonMark-ish). This may normalize whitespace.
     let mut out = String::new();
     let mut cmark_opts = CmarkOptions::default();
     cmark_opts.code_block_token_count = 3;
 
-    // Use the options-taking function; pass an ITERATOR (out_events.iter()).
-    let _state = cmark_with_options(out_events.into_iter(), &mut out, cmark_opts)
-    .context("serializing markdown")?;
+    // Convert Vec<Event> -> iterator of Cow<Event> so E: Borrow<Event> is satisfied.
+    let cow_iter = out_events.into_iter().map(Cow::Owned);
+
+    let _state = cmark_with_options(cow_iter, &mut out, cmark_opts)
+        .context("serializing markdown")?;
 
     Ok(out)
 }
