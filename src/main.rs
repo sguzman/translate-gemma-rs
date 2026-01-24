@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use pulldown_cmark::{Event, Options, Parser as MdParser, Tag, TagEnd};
-use pulldown_cmark_to_cmark::{cmark, Options as CmarkOptions};
+use pulldown_cmark_to_cmark::{cmark_with_options, Options as CmarkOptions};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -342,7 +342,6 @@ async fn translate_markdown_body(
     sem: std::sync::Arc<Semaphore>,
     body: &str,
 ) -> Result<String> {
-    // Parse Markdown into events, translate only human text.
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TABLES);
@@ -352,66 +351,66 @@ async fn translate_markdown_body(
 
     let parser = MdParser::new_ext(body, opts);
 
-    // We'll skip translating inside code blocks, inline code, and raw HTML.
     let mut in_code_block_depth: usize = 0;
     let mut in_html_block_depth: usize = 0;
 
-    let mut out_events: Vec<Event<'static>> = Vec::new();
+    // Keep the original event lifetime ('body) — translated text becomes OWNED.
+    let mut out_events: Vec<Event<'_>> = Vec::new();
 
-    // Small in-memory cache to avoid repeated disk reads in a single file.
     let mut memo: HashMap<String, String> = HashMap::new();
 
     for ev in parser {
-        match &ev {
+        match ev {
             Event::Start(tag) => {
-                match tag {
+                match &tag {
                     Tag::CodeBlock(_) => in_code_block_depth += 1,
                     Tag::HtmlBlock => in_html_block_depth += 1,
                     _ => {}
                 }
-                out_events.push(ev.into_static());
+                out_events.push(Event::Start(tag));
             }
+
             Event::End(tag_end) => {
-                match tag_end {
+                match &tag_end {
                     TagEnd::CodeBlock => {
                         if in_code_block_depth > 0 {
-                            in_code_block_depth -= 1
+                            in_code_block_depth -= 1;
                         }
                     }
                     TagEnd::HtmlBlock => {
                         if in_html_block_depth > 0 {
-                            in_html_block_depth -= 1
+                            in_html_block_depth -= 1;
                         }
                     }
                     _ => {}
                 }
-                out_events.push(ev.into_static());
+                out_events.push(Event::End(tag_end));
             }
-            Event::Code(_) => {
-                // Inline code: do not translate
-                out_events.push(ev.into_static());
+
+            Event::Code(c) => {
+                // inline code: do not translate
+                out_events.push(Event::Code(c));
             }
-            Event::Html(_) => {
-                // Raw HTML inline: do not translate
-                out_events.push(ev.into_static());
+
+            Event::Html(h) => {
+                // raw inline HTML: do not translate
+                out_events.push(Event::Html(h));
             }
+
             Event::Text(t) => {
                 if in_code_block_depth > 0 || in_html_block_depth > 0 {
-                    out_events.push(ev.into_static());
+                    out_events.push(Event::Text(t));
                     continue;
                 }
 
                 let original = t.to_string();
 
-                // Fast path: whitespace-only
                 if original.trim().is_empty() {
-                    out_events.push(Event::Text(original.into()));
+                    out_events.push(Event::Text(t));
                     continue;
                 }
 
-                // Per-file memo
                 if let Some(hit) = memo.get(&original) {
-                    debug!("memo hit: {} bytes", original.len());
                     out_events.push(Event::Text(hit.clone().into()));
                     continue;
                 }
@@ -426,21 +425,25 @@ async fn translate_markdown_body(
                 )
                 .await?;
 
-                memo.insert(original.clone(), translated.clone());
+                memo.insert(original, translated.clone());
+                // IMPORTANT: this becomes an OWNED CowStr internally, lifetime-safe.
                 out_events.push(Event::Text(translated.into()));
             }
-            _ => {
-                // SoftBreak/HardBreak, etc.
-                out_events.push(ev.into_static());
+
+            other => {
+                out_events.push(other);
             }
         }
     }
 
-    // Render back to Markdown (CommonMark-ish). This may normalize whitespace.
     let mut out = String::new();
     let mut cmark_opts = CmarkOptions::default();
-    cmark_opts.code_block_token_count = 3; // ```
-    cmark(&out_events, &mut out, cmark_opts).context("serializing markdown")?;
+    cmark_opts.code_block_token_count = 3;
+
+    // Use the options-taking function; pass an ITERATOR (out_events.iter()).
+    let _state = cmark_with_options(out_events.iter(), &mut out, cmark_opts)
+        .context("serializing markdown")?;
+
     Ok(out)
 }
 
@@ -608,27 +611,4 @@ fn hex_lower(bytes: &[u8]) -> String {
         out.push(LUT[(b & 0x0f) as usize] as char);
     }
     out
-}
-
-/// Helper: convert Event<'a> into Event<'static> by allocating owned strings.
-trait IntoStaticEvent {
-    fn into_static(self) -> Event<'static>;
-}
-
-impl<'a> IntoStaticEvent for Event<'a> {
-    fn into_static(self) -> Event<'static> {
-        match self {
-            Event::Text(cow) => Event::Text(cow.to_string().into()),
-            Event::Code(cow) => Event::Code(cow.to_string().into()),
-            Event::Html(cow) => Event::Html(cow.to_string().into()),
-            Event::InlineHtml(cow) => Event::InlineHtml(cow.to_string().into()),
-            Event::FootnoteReference(cow) => Event::FootnoteReference(cow.to_string().into()),
-            Event::SoftBreak => Event::SoftBreak,
-            Event::HardBreak => Event::HardBreak,
-            Event::Rule => Event::Rule,
-            Event::TaskListMarker(b) => Event::TaskListMarker(b),
-            Event::Start(tag) => Event::Start(tag),
-            Event::End(tag_end) => Event::End(tag_end),
-        }
-    }
 }
