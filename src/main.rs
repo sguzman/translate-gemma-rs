@@ -1,15 +1,15 @@
-use std::borrow::Cow;
-use anyhow::{anyhow, bail, Context, Result};
-use clap::Parser;
+use anyhow::{Context, Result, anyhow, bail};
+use clap::{Args, Parser, Subcommand};
 use pulldown_cmark::{Event, Options, Parser as MdParser, Tag, TagEnd};
-use pulldown_cmark_to_cmark::{cmark_with_options, Options as CmarkOptions};
+use pulldown_cmark_to_cmark::{Options as CmarkOptions, cmark_with_options};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
@@ -18,9 +18,29 @@ use walkdir::WalkDir;
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "ollama_md_translate",
-    about = "Translate Markdown files via Ollama (TranslateGemma) while preserving code blocks and markup."
+    about = "Translate Markdown files via Ollama (TranslateGemma) while preserving code blocks and markup.",
+    subcommand_required = true,
+    arg_required_else_help = true
 )]
 struct Cli {
+    /// Log level: error, warn, info, debug, trace
+    #[arg(long, default_value = "info")]
+    log_level: String,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum Commands {
+    /// Translate markdown files or directories
+    Translate(TranslateArgs),
+    /// Interactive REPL mode: translate each input line immediately
+    Repl(ReplArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+struct TranslateArgs {
     /// Input file or directory
     #[arg(value_name = "INPUT")]
     input: PathBuf,
@@ -65,13 +85,45 @@ struct Cli {
     #[arg(long)]
     cache_dir: Option<PathBuf>,
 
-    /// Log level: error, warn, info, debug, trace
-    #[arg(long, default_value = "info")]
-    log_level: String,
-
     /// Dry run: do not write files, just log what would happen
     #[arg(long, default_value_t = false)]
     dry_run: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ReplArgs {
+    /// Source language label (e.g., "English", "auto")
+    #[arg(long)]
+    source_lang: String,
+
+    /// Target language label (e.g., "German")
+    #[arg(long)]
+    target_lang: String,
+
+    /// Ollama model name (e.g., "translategemma:latest")
+    #[arg(long, default_value = "translategemma:latest")]
+    model: String,
+
+    /// Ollama base URL (no trailing /api). Example: http://localhost:11434
+    #[arg(long, default_value = "http://localhost:11434")]
+    base_url: String,
+
+    /// Keep model loaded in memory (Ollama keep_alive). Examples: "10m", "3600", "-1"
+    #[arg(long, default_value = "10m")]
+    keep_alive: String,
+
+    /// Cache directory for translated segments (default: .cache/ollama_md_translate)
+    #[arg(long)]
+    cache_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeConfig {
+    source_lang: String,
+    target_lang: String,
+    model: String,
+    base_url: String,
+    keep_alive: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,54 +151,76 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     init_tracing(&cli.log_level)?;
+    info!("log_level = {}", cli.log_level);
 
-    validate_args(&cli)?;
+    match cli.command {
+        Commands::Translate(args) => run_translate(args).await,
+        Commands::Repl(args) => run_repl(args).await,
+    }
+}
 
-    let cache_dir = cli
+async fn run_translate(args: TranslateArgs) -> Result<()> {
+    validate_args(&args)?;
+
+    let runtime = RuntimeConfig {
+        source_lang: args.source_lang.clone(),
+        target_lang: args.target_lang.clone(),
+        model: args.model.clone(),
+        base_url: args.base_url.clone(),
+        keep_alive: args.keep_alive.clone(),
+    };
+
+    let cache_dir = args
         .cache_dir
         .clone()
         .unwrap_or_else(|| PathBuf::from(".cache/ollama_md_translate"));
 
-    if !cli.dry_run {
+    if !args.dry_run {
         fs::create_dir_all(&cache_dir)
             .with_context(|| format!("creating cache dir: {}", cache_dir.display()))?;
     }
 
-    info!("input = {}", cli.input.display());
-    info!("model = {}", cli.model);
-    info!("base_url = {}", cli.base_url);
-    info!("source_lang = {}", cli.source_lang);
-    info!("target_lang = {}", cli.target_lang);
-    info!("in_place = {}", cli.in_place);
-    if let Some(out) = &cli.out_dir {
+    info!("mode = translate");
+    info!("input = {}", args.input.display());
+    info!("model = {}", runtime.model);
+    info!("base_url = {}", runtime.base_url);
+    info!("source_lang = {}", runtime.source_lang);
+    info!("target_lang = {}", runtime.target_lang);
+    info!("in_place = {}", args.in_place);
+    if let Some(out) = &args.out_dir {
         info!("out_dir = {}", out.display());
     }
     info!("cache_dir = {}", cache_dir.display());
-    info!("concurrency = {}", cli.concurrency);
-    info!("dry_run = {}", cli.dry_run);
+    info!("concurrency = {}", args.concurrency);
+    info!("dry_run = {}", args.dry_run);
 
     let client = Client::builder()
         .user_agent("ollama_md_translate/0.1.0")
         .build()
         .context("building reqwest client")?;
 
-    let files = collect_markdown_files(&cli.input)?;
+    let files = collect_markdown_files(&args.input)?;
     if files.is_empty() {
-        warn!("No markdown files found at {}", cli.input.display());
+        warn!("No markdown files found at {}", args.input.display());
         return Ok(());
     }
 
     info!("found {} markdown file(s)", files.len());
 
     // Concurrency guard for HTTP calls.
-    let sem = std::sync::Arc::new(Semaphore::new(cli.concurrency));
+    let sem = std::sync::Arc::new(Semaphore::new(args.concurrency));
 
     let mut failures = 0usize;
 
     for (idx, path) in files.iter().enumerate() {
-        info!("[{}/{}] processing {}", idx + 1, files.len(), path.display());
+        info!(
+            "[{}/{}] processing {}",
+            idx + 1,
+            files.len(),
+            path.display()
+        );
 
-        match process_one_file(&cli, &client, &cache_dir, sem.clone(), path).await {
+        match process_one_file(&args, &runtime, &client, &cache_dir, sem.clone(), path).await {
             Ok(()) => info!("ok: {}", path.display()),
             Err(e) => {
                 failures += 1;
@@ -163,6 +237,62 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn run_repl(args: ReplArgs) -> Result<()> {
+    let runtime = RuntimeConfig {
+        source_lang: args.source_lang.clone(),
+        target_lang: args.target_lang.clone(),
+        model: args.model.clone(),
+        base_url: args.base_url.clone(),
+        keep_alive: args.keep_alive.clone(),
+    };
+    let cache_dir = args
+        .cache_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(".cache/ollama_md_translate"));
+    fs::create_dir_all(&cache_dir)
+        .with_context(|| format!("creating cache dir: {}", cache_dir.display()))?;
+
+    info!("mode = repl");
+    info!("model = {}", runtime.model);
+    info!("base_url = {}", runtime.base_url);
+    info!("source_lang = {}", runtime.source_lang);
+    info!("target_lang = {}", runtime.target_lang);
+    info!("cache_dir = {}", cache_dir.display());
+    info!("REPL started; reading lines from stdin until EOF");
+
+    let client = Client::builder()
+        .user_agent("ollama_md_translate/0.1.0")
+        .build()
+        .context("building reqwest client")?;
+    let sem = std::sync::Arc::new(Semaphore::new(1));
+
+    let stdin = std::io::stdin();
+    for (line_no, line_res) in stdin.lock().lines().enumerate() {
+        let line_no = line_no + 1;
+        let line = line_res.with_context(|| format!("reading stdin line {}", line_no))?;
+        debug!("repl line={} bytes={}", line_no, line.len());
+        if line.trim().is_empty() {
+            println!();
+            continue;
+        }
+        let translated = translate_plaintext(
+            &runtime,
+            &client,
+            &cache_dir,
+            sem.clone(),
+            &line,
+            "repl_line",
+        )
+        .await
+        .with_context(|| format!("translating stdin line {}", line_no))?;
+        println!("{}", translated);
+        std::io::stdout().flush().context("flushing stdout")?;
+    }
+
+    info!("REPL ended (EOF)");
+    Ok(())
+}
+
 fn init_tracing(level: &str) -> Result<()> {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info"));
@@ -170,11 +300,11 @@ fn init_tracing(level: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_args(cli: &Cli) -> Result<()> {
-    if cli.in_place && cli.out_dir.is_some() {
+fn validate_args(args: &TranslateArgs) -> Result<()> {
+    if args.in_place && args.out_dir.is_some() {
         bail!("Use either --in-place or --out-dir, not both");
     }
-    if !cli.in_place && cli.out_dir.is_none() {
+    if !args.in_place && args.out_dir.is_none() {
         bail!("If not using --in-place, you must provide --out-dir");
     }
     Ok(())
@@ -182,7 +312,10 @@ fn validate_args(cli: &Cli) -> Result<()> {
 
 fn is_markdown_path(p: &Path) -> bool {
     matches!(
-        p.extension().and_then(OsStr::to_str).map(|s| s.to_lowercase()).as_deref(),
+        p.extension()
+            .and_then(OsStr::to_str)
+            .map(|s| s.to_lowercase())
+            .as_deref(),
         Some("md") | Some("markdown") | Some("mdown") | Some("mkd") | Some("mkdn")
     )
 }
@@ -212,7 +345,8 @@ fn collect_markdown_files(input: &Path) -> Result<Vec<PathBuf>> {
 }
 
 async fn process_one_file(
-    cli: &Cli,
+    args: &TranslateArgs,
+    runtime: &RuntimeConfig,
     client: &Client,
     cache_dir: &Path,
     sem: std::sync::Arc<Semaphore>,
@@ -223,11 +357,11 @@ async fn process_one_file(
     let (frontmatter_opt, body) = split_frontmatter(&raw);
 
     let translated_frontmatter = if let Some(frontmatter) = frontmatter_opt.as_deref() {
-        if cli.translate_frontmatter {
+        if args.translate_frontmatter {
             info!("translating front matter");
             Some(
                 translate_plaintext(
-                    cli,
+                    runtime,
                     client,
                     cache_dir,
                     sem.clone(),
@@ -245,7 +379,7 @@ async fn process_one_file(
     };
 
     let translated_body =
-        translate_markdown_body(cli, client, cache_dir, sem.clone(), body).await?;
+        translate_markdown_body(runtime, client, cache_dir, sem.clone(), body).await?;
 
     let mut final_out = String::new();
     if let Some(fm) = translated_frontmatter {
@@ -253,8 +387,8 @@ async fn process_one_file(
     }
     final_out.push_str(&translated_body);
 
-    let out_path = compute_output_path(cli, path)?;
-    if cli.dry_run {
+    let out_path = compute_output_path(args, path)?;
+    if args.dry_run {
         info!("dry_run: would write {}", out_path.display());
         return Ok(());
     }
@@ -270,14 +404,17 @@ async fn process_one_file(
     Ok(())
 }
 
-fn compute_output_path(cli: &Cli, in_path: &Path) -> Result<PathBuf> {
-    if cli.in_place {
+fn compute_output_path(args: &TranslateArgs, in_path: &Path) -> Result<PathBuf> {
+    if args.in_place {
         return Ok(in_path.to_path_buf());
     }
 
-    let out_dir = cli.out_dir.as_ref().ok_or_else(|| anyhow!("missing --out-dir"))?;
+    let out_dir = args
+        .out_dir
+        .as_ref()
+        .ok_or_else(|| anyhow!("missing --out-dir"))?;
 
-    if cli.input.is_file() {
+    if args.input.is_file() {
         // Single file: output is out_dir/<filename>
         let fname = in_path
             .file_name()
@@ -286,8 +423,8 @@ fn compute_output_path(cli: &Cli, in_path: &Path) -> Result<PathBuf> {
     } else {
         // Directory: preserve relative path under input root
         let rel = in_path
-            .strip_prefix(&cli.input)
-            .with_context(|| format!("computing relative path under {}", cli.input.display()))?;
+            .strip_prefix(&args.input)
+            .with_context(|| format!("computing relative path under {}", args.input.display()))?;
         Ok(out_dir.join(rel))
     }
 }
@@ -302,13 +439,8 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         f.sync_all()
             .with_context(|| format!("sync temp file {}", tmp.display()))?;
     }
-    fs::rename(&tmp, path).with_context(|| {
-        format!(
-            "atomic rename {} -> {}",
-            tmp.display(),
-            path.display()
-        )
-    })?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("atomic rename {} -> {}", tmp.display(), path.display()))?;
     Ok(())
 }
 
@@ -337,7 +469,7 @@ fn split_frontmatter(input: &str) -> (Option<String>, &str) {
 }
 
 async fn translate_markdown_body(
-    cli: &Cli,
+    runtime: &RuntimeConfig,
     client: &Client,
     cache_dir: &Path,
     sem: std::sync::Arc<Semaphore>,
@@ -417,7 +549,7 @@ async fn translate_markdown_body(
                 }
 
                 let translated = translate_plaintext(
-                    cli,
+                    runtime,
                     client,
                     cache_dir,
                     sem.clone(),
@@ -445,21 +577,27 @@ async fn translate_markdown_body(
     // Convert Vec<Event> -> iterator of Cow<Event> so E: Borrow<Event> is satisfied.
     let cow_iter = out_events.into_iter().map(Cow::Owned);
 
-    let _state = cmark_with_options(cow_iter, &mut out, cmark_opts)
-        .context("serializing markdown")?;
+    let _state =
+        cmark_with_options(cow_iter, &mut out, cmark_opts).context("serializing markdown")?;
 
     Ok(out)
 }
 
 async fn translate_plaintext(
-    cli: &Cli,
+    runtime: &RuntimeConfig,
     client: &Client,
     cache_dir: &Path,
     sem: std::sync::Arc<Semaphore>,
     text: &str,
     kind: &str,
 ) -> Result<String> {
-    let key = cache_key(&cli.model, &cli.source_lang, &cli.target_lang, kind, text);
+    let key = cache_key(
+        &runtime.model,
+        &runtime.source_lang,
+        &runtime.target_lang,
+        kind,
+        text,
+    );
     if let Some(hit) = cache_read(cache_dir, &key)? {
         debug!("cache hit: kind={} bytes={}", kind, text.len());
         return Ok(hit);
@@ -470,18 +608,18 @@ async fn translate_plaintext(
     // Prevent flooding the server with too many concurrent requests.
     let _permit = sem.acquire().await.context("semaphore acquire")?;
 
-    let prompt = build_translation_prompt(&cli.source_lang, &cli.target_lang, text);
+    let prompt = build_translation_prompt(&runtime.source_lang, &runtime.target_lang, text);
 
-    let url = format!("{}/api/generate", cli.base_url.trim_end_matches('/'));
+    let url = format!("{}/api/generate", runtime.base_url.trim_end_matches('/'));
 
     debug!("POST {} ({} bytes)", url, prompt.len());
 
     let req = OllamaGenerateRequest {
-        model: &cli.model,
+        model: &runtime.model,
         prompt: &prompt,
         stream: false,
         system: None,
-        keep_alive: Some(&cli.keep_alive),
+        keep_alive: Some(&runtime.keep_alive),
     };
 
     let resp = client
