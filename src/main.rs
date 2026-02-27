@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{IsTerminal, Write};
+use std::io::{ErrorKind, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
@@ -172,6 +173,7 @@ async fn main() -> Result<()> {
 
 async fn run_translate(args: TranslateArgs) -> Result<()> {
     validate_args(&args)?;
+    let stop_requested = install_ctrlc_handler("translate");
 
     let runtime = RuntimeConfig {
         source_lang: args.source_lang.clone(),
@@ -224,6 +226,11 @@ async fn run_translate(args: TranslateArgs) -> Result<()> {
     let mut failures = 0usize;
 
     for (idx, path) in files.iter().enumerate() {
+        if stop_requested.load(Ordering::SeqCst) {
+            warn!("Ctrl+C received; stopping after current file boundary");
+            break;
+        }
+
         info!(
             "[{}/{}] processing {}",
             idx + 1,
@@ -243,6 +250,10 @@ async fn run_translate(args: TranslateArgs) -> Result<()> {
     if failures > 0 {
         bail!("completed with {} failure(s)", failures);
     }
+    if stop_requested.load(Ordering::SeqCst) {
+        info!("translation run interrupted by Ctrl+C");
+        return Ok(());
+    }
 
     info!("done");
     Ok(())
@@ -250,6 +261,7 @@ async fn run_translate(args: TranslateArgs) -> Result<()> {
 
 async fn run_repl(args: ReplArgs) -> Result<()> {
     validate_repl_args(&args)?;
+    let stop_requested = install_ctrlc_handler("repl");
 
     let runtime = RuntimeConfig {
         source_lang: args.source_lang.clone(),
@@ -283,11 +295,26 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
     let mut line_no = 0usize;
     let mut line = String::new();
     loop {
+        if stop_requested.load(Ordering::SeqCst) {
+            info!("REPL interrupted by Ctrl+C");
+            break;
+        }
+
         line.clear();
-        let bytes = stdin
-            .read_line(&mut line)
-            .context("reading stdin line from REPL")?;
+        let bytes = match stdin.read_line(&mut line) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == ErrorKind::Interrupted => {
+                if stop_requested.load(Ordering::SeqCst) {
+                    info!("REPL interrupted by Ctrl+C");
+                    break;
+                }
+                debug!("stdin read interrupted; retrying");
+                continue;
+            }
+            Err(e) => return Err(e).context("reading stdin line from REPL"),
+        };
         if bytes == 0 {
+            info!("REPL received EOF (Ctrl+D)");
             break;
         }
         line_no += 1;
@@ -358,6 +385,27 @@ fn maybe_run_repl_with_rlwrap(cli: &Cli) -> Result<Option<i32>> {
         }
         Err(e) => Err(e).context("failed to launch rlwrap"),
     }
+}
+
+fn install_ctrlc_handler(scope: &str) -> std::sync::Arc<AtomicBool> {
+    let stop_requested = std::sync::Arc::new(AtomicBool::new(false));
+    let stop_requested_task = stop_requested.clone();
+    let scope = scope.to_string();
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                stop_requested_task.store(true, Ordering::SeqCst);
+                warn!(
+                    "received Ctrl+C in {} mode; requesting graceful shutdown",
+                    scope
+                );
+            }
+            Err(e) => {
+                error!("failed to listen for Ctrl+C in {} mode: {:#}", scope, e);
+            }
+        }
+    });
+    stop_requested
 }
 
 fn init_tracing(level: &str) -> Result<()> {
