@@ -7,13 +7,17 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
+
+const RLWRAP_GUARD_ENV: &str = "OLLAMA_MD_TRANSLATE_RLWRAP_ACTIVE";
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -152,6 +156,13 @@ async fn main() -> Result<()> {
 
     init_tracing(&cli.log_level)?;
     info!("log_level = {}", cli.log_level);
+
+    if let Some(code) = maybe_run_repl_with_rlwrap(&cli)? {
+        if code == 0 {
+            return Ok(());
+        }
+        bail!("rlwrap child exited with status code {}", code);
+    }
 
     match cli.command {
         Commands::Translate(args) => run_translate(args).await,
@@ -301,12 +312,52 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
         )
         .await
         .with_context(|| format!("translating stdin line {}", line_no))?;
-        println!("{}", translated);
+        if std::io::stdout().is_terminal() {
+            println!("\x1b[1m{}\x1b[0m", translated);
+        } else {
+            println!("{}", translated);
+        }
         std::io::stdout().flush().context("flushing stdout")?;
     }
 
     info!("REPL ended (EOF)");
     Ok(())
+}
+
+fn maybe_run_repl_with_rlwrap(cli: &Cli) -> Result<Option<i32>> {
+    if !matches!(cli.command, Commands::Repl(_)) {
+        return Ok(None);
+    }
+    if env::var_os(RLWRAP_GUARD_ENV).is_some() {
+        debug!("rlwrap guard env is present; not re-executing");
+        return Ok(None);
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        debug!("stdin/stdout is not a terminal; skipping rlwrap integration");
+        return Ok(None);
+    }
+
+    let exe = env::current_exe().context("resolving current executable path")?;
+    let args: Vec<_> = env::args_os().skip(1).collect();
+    info!("starting repl through rlwrap");
+
+    match Command::new("rlwrap")
+        .arg(exe)
+        .args(args)
+        .env(RLWRAP_GUARD_ENV, "1")
+        .status()
+    {
+        Ok(status) => {
+            let code = status.code().unwrap_or(1);
+            info!("rlwrap child exited with status code {}", code);
+            Ok(Some(code))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            warn!("rlwrap not found in PATH; continuing without rlwrap");
+            Ok(None)
+        }
+        Err(e) => Err(e).context("failed to launch rlwrap"),
+    }
 }
 
 fn init_tracing(level: &str) -> Result<()> {
