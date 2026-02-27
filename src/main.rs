@@ -261,7 +261,13 @@ async fn run_translate(args: TranslateArgs) -> Result<()> {
 
 async fn run_repl(args: ReplArgs) -> Result<()> {
     validate_repl_args(&args)?;
-    let stop_requested = install_ctrlc_handler("repl");
+    let use_internal_ctrlc = env::var_os(RLWRAP_GUARD_ENV).is_none();
+    let stop_requested = if use_internal_ctrlc {
+        Some(install_ctrlc_handler("repl"))
+    } else {
+        debug!("running under rlwrap; delegating Ctrl+C handling to rlwrap");
+        None
+    };
 
     let runtime = RuntimeConfig {
         source_lang: args.source_lang.clone(),
@@ -295,7 +301,10 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
     let mut line_no = 0usize;
     let mut line = String::new();
     loop {
-        if stop_requested.load(Ordering::SeqCst) {
+        if stop_requested
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+        {
             info!("REPL interrupted by Ctrl+C");
             break;
         }
@@ -304,12 +313,19 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
         let bytes = match stdin.read_line(&mut line) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == ErrorKind::Interrupted => {
-                if stop_requested.load(Ordering::SeqCst) {
+                if stop_requested
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(Ordering::SeqCst))
+                {
                     info!("REPL interrupted by Ctrl+C");
                     break;
                 }
                 debug!("stdin read interrupted; retrying");
                 continue;
+            }
+            Err(e) if e.raw_os_error() == Some(5) => {
+                info!("REPL input stream closed (I/O error); exiting");
+                break;
             }
             Err(e) => return Err(e).context("reading stdin line from REPL"),
         };
@@ -369,6 +385,8 @@ fn maybe_run_repl_with_rlwrap(cli: &Cli) -> Result<Option<i32>> {
     info!("starting repl through rlwrap");
 
     match Command::new("rlwrap")
+        .arg("--no-warnings")
+        .arg("--pass-sigint-as-sigterm")
         .arg(exe)
         .args(args)
         .env(RLWRAP_GUARD_ENV, "1")
