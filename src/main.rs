@@ -438,18 +438,62 @@ fn install_ctrlc_handler(scope: &str) -> std::sync::Arc<AtomicBool> {
 }
 
 fn copy_to_primary_selection(text: &str) -> Result<()> {
-    let attempts: [(&str, &[&str]); 3] = [
-        ("wl-copy", &["--primary"]),
-        ("xclip", &["-selection", "primary", "-in"]),
-        ("xsel", &["--primary", "--input"]),
-    ];
+    let primary = copy_with_selection(text, SelectionKind::Primary);
+    let clipboard = copy_with_selection(text, SelectionKind::Clipboard);
+
+    match (primary, clipboard) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(e)) => {
+            debug!("primary updated, clipboard update failed: {:#}", e);
+            Ok(())
+        }
+        (Err(e), Ok(())) => {
+            warn!(
+                "primary selection update failed, but clipboard updated: {:#}",
+                e
+            );
+            Ok(())
+        }
+        (Err(a), Err(b)) => Err(anyhow!(
+            "failed to update primary and clipboard selections: primary={:#}; clipboard={:#}",
+            a,
+            b
+        )),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SelectionKind {
+    Primary,
+    Clipboard,
+}
+
+fn copy_with_selection(text: &str, selection: SelectionKind) -> Result<()> {
+    let attempts: [(&str, &[&str]); 3] = match selection {
+        SelectionKind::Primary => [
+            ("wl-copy", &["--primary"]),
+            ("xclip", &["-selection", "primary", "-in"]),
+            ("xsel", &["--primary", "--input"]),
+        ],
+        SelectionKind::Clipboard => [
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard", "-in"]),
+            ("xsel", &["--clipboard", "--input"]),
+        ],
+    };
 
     let mut last_error: Option<anyhow::Error> = None;
-
     for (cmd, args) in attempts {
         match write_to_command_stdin(cmd, args, text) {
             Ok(()) => {
-                debug!("primary selection updated via {}", cmd);
+                debug!(
+                    "{} selection updated via {}",
+                    match selection {
+                        SelectionKind::Primary => "primary",
+                        SelectionKind::Clipboard => "clipboard",
+                    },
+                    cmd
+                );
                 return Ok(());
             }
             Err(e) => {
