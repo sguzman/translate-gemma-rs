@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
@@ -269,12 +269,26 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
     let sem = std::sync::Arc::new(Semaphore::new(1));
 
     let stdin = std::io::stdin();
-    for (line_no, line_res) in stdin.lock().lines().enumerate() {
-        let line_no = line_no + 1;
-        let line = line_res.with_context(|| format!("reading stdin line {}", line_no))?;
+    let mut line_no = 0usize;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes = stdin
+            .read_line(&mut line)
+            .context("reading stdin line from REPL")?;
+        if bytes == 0 {
+            break;
+        }
+        line_no += 1;
+
+        while line.ends_with('\n') || line.ends_with('\r') {
+            line.pop();
+        }
+
         debug!("repl line={} bytes={}", line_no, line.len());
         if line.trim().is_empty() {
             println!();
+            std::io::stdout().flush().context("flushing stdout")?;
             continue;
         }
         let translated = translate_plaintext(
@@ -282,7 +296,7 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
             &client,
             &cache_dir,
             sem.clone(),
-            &line,
+            line.as_str(),
             "repl_line",
         )
         .await
