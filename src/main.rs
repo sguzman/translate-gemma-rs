@@ -45,12 +45,12 @@ struct TranslateArgs {
     #[arg(value_name = "INPUT")]
     input: PathBuf,
 
-    /// Source language label (e.g., "English", "auto")
+    /// Source language code (ISO-639-3, e.g., "eng"). "auto" is also accepted.
     #[arg(long, default_value = "auto")]
     source_lang: String,
 
-    /// Target language label (e.g., "German")
-    #[arg(long, default_value = "German")]
+    /// Target language code (ISO-639-3, e.g., "deu")
+    #[arg(long, default_value = "deu")]
     target_lang: String,
 
     /// Ollama model name (e.g., "translategemma:latest")
@@ -92,11 +92,11 @@ struct TranslateArgs {
 
 #[derive(Args, Debug, Clone)]
 struct ReplArgs {
-    /// Source language label (e.g., "English", "auto")
+    /// Source language code (ISO-639-3, e.g., "eng"). "auto" is also accepted.
     #[arg(long)]
     source_lang: String,
 
-    /// Target language label (e.g., "German")
+    /// Target language code (ISO-639-3, e.g., "deu")
     #[arg(long)]
     target_lang: String,
 
@@ -238,6 +238,8 @@ async fn run_translate(args: TranslateArgs) -> Result<()> {
 }
 
 async fn run_repl(args: ReplArgs) -> Result<()> {
+    validate_repl_args(&args)?;
+
     let runtime = RuntimeConfig {
         source_lang: args.source_lang.clone(),
         target_lang: args.target_lang.clone(),
@@ -306,6 +308,30 @@ fn validate_args(args: &TranslateArgs) -> Result<()> {
     }
     if !args.in_place && args.out_dir.is_none() {
         bail!("If not using --in-place, you must provide --out-dir");
+    }
+    validate_lang_code(&args.source_lang, "source language", true)?;
+    validate_lang_code(&args.target_lang, "target language", false)?;
+    Ok(())
+}
+
+fn validate_repl_args(args: &ReplArgs) -> Result<()> {
+    validate_lang_code(&args.source_lang, "source language", true)?;
+    validate_lang_code(&args.target_lang, "target language", false)?;
+    Ok(())
+}
+
+fn validate_lang_code(code: &str, label: &str, allow_auto: bool) -> Result<()> {
+    let normalized = code.trim().to_ascii_lowercase();
+    if allow_auto && normalized == "auto" {
+        return Ok(());
+    }
+    if normalized.len() != 3 || !normalized.chars().all(|c| c.is_ascii_alphabetic()) {
+        bail!(
+            "{} must be a 3-letter code (e.g., eng, deu){}: {}",
+            label,
+            if allow_auto { " or 'auto'" } else { "" },
+            code
+        );
     }
     Ok(())
 }
@@ -650,7 +676,7 @@ fn build_translation_prompt(source: &str, target: &str, text: &str) -> String {
     // We say "plain text extracted from Markdown" to discourage adding markup.
     format!(
         "You are a translation engine.\n\
-         Translate from {source} to {target}.\n\
+         Translate from source language code {source} to target language code {target}.\n\
          The input is plain text extracted from a Markdown document.\n\
          Rules:\n\
          - Output ONLY the translation (no preface, no quotes, no notes).\n\
