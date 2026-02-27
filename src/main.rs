@@ -176,8 +176,8 @@ async fn run_translate(args: TranslateArgs) -> Result<()> {
     let stop_requested = install_ctrlc_handler("translate");
 
     let runtime = RuntimeConfig {
-        source_lang: args.source_lang.clone(),
-        target_lang: args.target_lang.clone(),
+        source_lang: normalize_lang_code(&args.source_lang, true)?,
+        target_lang: normalize_lang_code(&args.target_lang, false)?,
         model: args.model.clone(),
         base_url: args.base_url.clone(),
         keep_alive: args.keep_alive.clone(),
@@ -270,8 +270,8 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
     };
 
     let runtime = RuntimeConfig {
-        source_lang: args.source_lang.clone(),
-        target_lang: args.target_lang.clone(),
+        source_lang: normalize_lang_code(&args.source_lang, true)?,
+        target_lang: normalize_lang_code(&args.target_lang, false)?,
         model: args.model.clone(),
         base_url: args.base_url.clone(),
         keep_alive: args.keep_alive.clone(),
@@ -452,11 +452,7 @@ fn validate_repl_args(args: &ReplArgs) -> Result<()> {
 }
 
 fn validate_lang_code(code: &str, label: &str, allow_auto: bool) -> Result<()> {
-    let normalized = code.trim().to_ascii_lowercase();
-    if allow_auto && normalized == "auto" {
-        return Ok(());
-    }
-    if normalized.len() != 3 || !normalized.chars().all(|c| c.is_ascii_alphabetic()) {
+    if normalize_lang_code(code, allow_auto).is_err() {
         bail!(
             "{} must be a 3-letter code (e.g., eng, deu){}: {}",
             label,
@@ -465,6 +461,64 @@ fn validate_lang_code(code: &str, label: &str, allow_auto: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn normalize_lang_code(code: &str, allow_auto: bool) -> Result<String> {
+    let normalized = code.trim().to_ascii_lowercase();
+    if allow_auto && normalized == "auto" {
+        return Ok(normalized);
+    }
+    if normalized.len() != 3 || !normalized.chars().all(|c| c.is_ascii_alphabetic()) {
+        bail!("invalid 3-letter language code: {}", code);
+    }
+
+    let canonical = match normalized.as_str() {
+        // Common ISO-639-2/B aliases -> ISO-639-3 forms.
+        "gre" => "ell",
+        "ger" => "deu",
+        "fre" => "fra",
+        "rum" => "ron",
+        "slo" => "slk",
+        "alb" => "sqi",
+        "arm" => "hye",
+        "baq" => "eus",
+        "bur" => "mya",
+        "chi" => "zho",
+        "cze" => "ces",
+        "dut" => "nld",
+        "geo" => "kat",
+        "ice" => "isl",
+        "mac" => "mkd",
+        "mao" => "mri",
+        "may" => "msa",
+        "per" => "fas",
+        "tib" => "bod",
+        "wel" => "cym",
+        _ => normalized.as_str(),
+    };
+    Ok(canonical.to_string())
+}
+
+fn language_display_name(code: &str) -> &'static str {
+    match code {
+        "eng" => "English",
+        "ell" => "Greek",
+        "rus" => "Russian",
+        "deu" => "German",
+        "spa" => "Spanish",
+        "fra" => "French",
+        "ita" => "Italian",
+        "por" => "Portuguese",
+        "zho" => "Chinese",
+        "jpn" => "Japanese",
+        "kor" => "Korean",
+        "ukr" => "Ukrainian",
+        "pol" => "Polish",
+        "arb" => "Arabic",
+        "hin" => "Hindi",
+        "auto" => "Auto-detect",
+        _ => "Unknown",
+    }
 }
 
 fn is_markdown_path(p: &Path) -> bool {
@@ -805,18 +859,22 @@ async fn translate_plaintext(
 fn build_translation_prompt(source: &str, target: &str, text: &str) -> String {
     // Very strict: output only the translation.
     // We say "plain text extracted from Markdown" to discourage adding markup.
+    let source_name = language_display_name(source);
+    let target_name = language_display_name(target);
     format!(
         "You are a translation engine.\n\
-         Translate from source language code {source} to target language code {target}.\n\
+         Translate from source language code {source} ({source_name}) to target language code {target} ({target_name}).\n\
          The input is plain text extracted from a Markdown document.\n\
          Rules:\n\
          - Output ONLY the translation (no preface, no quotes, no notes).\n\
          - Preserve line breaks exactly.\n\
          - Do not add Markdown syntax.\n\
          - Keep URLs and email addresses unchanged if they appear.\n\n\
-         INPUT:\n{text}\n",
+        INPUT:\n{text}\n",
         source = source,
+        source_name = source_name,
         target = target,
+        target_name = target_name,
         text = text
     )
 }
