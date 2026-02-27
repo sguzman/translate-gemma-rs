@@ -42,6 +42,8 @@ enum Commands {
     Translate(TranslateArgs),
     /// Interactive REPL mode: translate each input line immediately
     Repl(ReplArgs),
+    /// Resolve a case-insensitive English language name to a 3-letter code
+    LangCode(LangCodeArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -126,6 +128,13 @@ struct ReplArgs {
     copy_primary: bool,
 }
 
+#[derive(Args, Debug, Clone)]
+struct LangCodeArgs {
+    /// English language name (case-insensitive), e.g. "English", "Spanish", "French"
+    #[arg(value_name = "LANGUAGE_NAME")]
+    language_name: String,
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeConfig {
     source_lang: String,
@@ -172,7 +181,27 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Translate(args) => run_translate(args).await,
         Commands::Repl(args) => run_repl(args).await,
+        Commands::LangCode(args) => run_lang_code(args),
     }
+}
+
+fn run_lang_code(args: LangCodeArgs) -> Result<()> {
+    info!("mode = lang-code");
+    info!("language_name = {}", args.language_name);
+
+    let normalized = normalize_english_language_name(&args.language_name);
+    debug!("normalized_language_name = {}", normalized);
+
+    let code = english_name_to_lang_code(&normalized).ok_or_else(|| {
+        anyhow!(
+            "unsupported language name '{}'; try one of: English, Spanish, French, German, Greek, Russian",
+            args.language_name
+        )
+    })?;
+
+    println!("{}", code);
+    info!("resolved language code = {}", code);
+    Ok(())
 }
 
 async fn run_translate(args: TranslateArgs) -> Result<()> {
@@ -629,6 +658,36 @@ fn language_display_name(code: &str) -> &'static str {
         "hin" => "Hindi",
         "auto" => "Auto-detect",
         _ => "Unknown",
+    }
+}
+
+fn normalize_english_language_name(name: &str) -> String {
+    name.trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn english_name_to_lang_code(normalized_name: &str) -> Option<&'static str> {
+    match normalized_name {
+        "english" => Some("eng"),
+        "greek" | "modern greek" => Some("ell"),
+        "russian" => Some("rus"),
+        "german" => Some("deu"),
+        "spanish" => Some("spa"),
+        "french" => Some("fra"),
+        "italian" => Some("ita"),
+        "portuguese" => Some("por"),
+        "chinese" | "mandarin" | "mandarin chinese" => Some("zho"),
+        "japanese" => Some("jpn"),
+        "korean" => Some("kor"),
+        "ukrainian" => Some("ukr"),
+        "polish" => Some("pol"),
+        "arabic" | "standard arabic" => Some("arb"),
+        "hindi" => Some("hin"),
+        _ => None,
     }
 }
 
