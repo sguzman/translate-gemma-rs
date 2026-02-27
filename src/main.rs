@@ -12,7 +12,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io::{ErrorKind, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
@@ -120,6 +120,10 @@ struct ReplArgs {
     /// Cache directory for translated segments (default: .cache/ollama_md_translate)
     #[arg(long)]
     cache_dir: Option<PathBuf>,
+
+    /// Copy each translated line to PRIMARY selection (middle-click paste). Requires wl-copy, xclip, or xsel.
+    #[arg(long, default_value_t = false)]
+    copy_primary: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -289,6 +293,7 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
     info!("source_lang = {}", runtime.source_lang);
     info!("target_lang = {}", runtime.target_lang);
     info!("cache_dir = {}", cache_dir.display());
+    info!("copy_primary = {}", args.copy_primary);
     info!("REPL started; reading lines from stdin until EOF");
 
     let client = Client::builder()
@@ -360,6 +365,12 @@ async fn run_repl(args: ReplArgs) -> Result<()> {
         } else {
             println!("{}", translated);
         }
+        if args.copy_primary {
+            match copy_to_primary_selection(&translated) {
+                Ok(()) => debug!("copied translated line to primary selection"),
+                Err(e) => warn!("failed to copy line to primary selection: {:#}", e),
+            }
+        }
         std::io::stdout().flush().context("flushing stdout")?;
     }
 
@@ -424,6 +435,62 @@ fn install_ctrlc_handler(scope: &str) -> std::sync::Arc<AtomicBool> {
         }
     });
     stop_requested
+}
+
+fn copy_to_primary_selection(text: &str) -> Result<()> {
+    let attempts: [(&str, &[&str]); 3] = [
+        ("wl-copy", &["--primary"]),
+        ("xclip", &["-selection", "primary", "-in"]),
+        ("xsel", &["--primary", "--input"]),
+    ];
+
+    let mut last_error: Option<anyhow::Error> = None;
+
+    for (cmd, args) in attempts {
+        match write_to_command_stdin(cmd, args, text) {
+            Ok(()) => {
+                debug!("primary selection updated via {}", cmd);
+                return Ok(());
+            }
+            Err(e) => {
+                debug!("clipboard helper {} failed: {:#}", cmd, e);
+                last_error = Some(e);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("no clipboard helper attempted")))
+}
+
+fn write_to_command_stdin(cmd: &str, args: &[&str], text: &str) -> Result<()> {
+    let mut child = match Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) if e.kind() == ErrorKind::NotFound => bail!("{} not found in PATH", cmd),
+        Err(e) => return Err(e).with_context(|| format!("starting {}", cmd)),
+    };
+
+    let mut child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("failed to open stdin for {}", cmd))?;
+    child_stdin
+        .write_all(text.as_bytes())
+        .with_context(|| format!("writing translated text to {}", cmd))?;
+    drop(child_stdin);
+
+    let status = child
+        .wait()
+        .with_context(|| format!("waiting for {}", cmd))?;
+    if !status.success() {
+        bail!("{} exited with non-zero status {}", cmd, status);
+    }
+    Ok(())
 }
 
 fn init_tracing(level: &str) -> Result<()> {
