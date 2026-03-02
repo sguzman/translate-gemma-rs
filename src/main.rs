@@ -194,7 +194,7 @@ fn run_lang_code(args: LangCodeArgs) -> Result<()> {
 
     let code = english_name_to_lang_code(&normalized).ok_or_else(|| {
         anyhow!(
-            "unsupported language name '{}'; try one of: English, Spanish, French, German, Greek, Russian",
+            "unsupported language name '{}'; try one of: English, Spanish, French, German, Greek, Russian, Dutch",
             args.language_name
         )
     })?;
@@ -678,6 +678,7 @@ fn english_name_to_lang_code(normalized_name: &str) -> Option<&'static str> {
         "german" => Some("deu"),
         "spanish" => Some("spa"),
         "french" => Some("fra"),
+        "dutch" | "flemish" => Some("nld"),
         "italian" => Some("ita"),
         "portuguese" => Some("por"),
         "chinese" | "mandarin" | "mandarin chinese" => Some("zho"),
